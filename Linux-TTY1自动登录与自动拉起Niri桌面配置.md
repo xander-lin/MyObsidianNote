@@ -19,6 +19,9 @@ ExecStart=-/sbin/agetty --autologin life --noclear %I $TERM
 
 - **作用**：系统启动时，getty 服务直接以指定用户（如 `life`）免密自动登录到 tty1，无需手动输入用户名与密码。
 
+> [!warning] 末位参数是 TERM 值，不要照抄或替换成占位符
+> `$TERM` 会被 systemd 展开为 `linux`。曾因在另一台机器上把它写成字面量 `unknown`，导致自动登录会话 `TERM=unknown`，zsh 行编辑器失去 terminfo，控制台上每个按键被绘制两次（显示两个、实际输入一个）。详见 [[Linux-TTY自动登录后字符双显排查与修复]]。
+
 ---
 
 ## 二、Zsh 配置目录重定向（可选）
