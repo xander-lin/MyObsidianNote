@@ -1,14 +1,16 @@
-# Linux Rime 大写锁定时 Delete 误删已上屏文本排查与修复
+# Linux Rime 开启大写锁定时无法编辑预编辑框排查与修复
 
-x18（Arch Linux + niri + fcitx5-rime，方案雾凇拼音）上，**Caps Lock 开启**时在中文预编辑（拼音/候选）期间按 Delete，删掉的不是预编辑内容，而是应用里**已经上屏**的文本；Caps Lock 关闭时一切正常。本文记录从复现到 librime 源码级根因、再到"配置层补绑"修复的全过程。
+x18（Arch Linux + niri + fcitx5-rime，方案雾凇拼音）上，**Caps Lock 开启**时输入拼音，预编辑框能正常显示，但预编辑框里的内容改不动——按 BackSpace 删不掉刚输入的字母、Esc 取消不掉、Delete 无反应、方向键移不进去。这些按键并没有消失，而是被 Rime **原样透传给当前应用**，于是实际被编辑的是应用里**已经上屏**的文本。Caps Lock 关闭时一切正常。本文记录从复现到 librime 源码级根因、再到"配置层补绑"修复的全过程。
 
 ---
 
 ## 一、问题现象
 
-- Caps Lock 灯亮 → 输入拼音（预编辑可见）→ 按 Delete：**光标后已上屏的文本被删除**；
-- Caps Lock 关闭 → 同样操作：Delete 被输入法消费，预编辑与应用文本都无恙（rime 原生语义：caret 在末尾时前向删除无可删内容，键被吃掉）；
-- 同一场景下 BackSpace / Esc / 回车 / 空格（选候选）理论上同样受影响。
+- Caps Lock 灯亮 → 输入拼音（预编辑可见）→ 按 BackSpace / Delete / Esc / 方向键：**预编辑框毫无反应**，按键落到当前应用上；
+  - BackSpace 删掉的是光标**前**已上屏的字，Delete 删掉的是光标**后**已上屏的字，方向键移动的是应用里的光标——想改拼音，改的却是正文。
+- Caps Lock 关闭 → 同样操作：按键被输入法消费，预编辑框正常可编辑（BackSpace 删拼音字母、Esc 清空预编辑），应用文本不受影响；
+- 同一场景下 回车 / 空格（选候选）同样受影响。
+- 判断要点：**只在 Caps Lock 亮着时复现**；症状是"按键透传给应用"，不是"输入法无响应"。
 
 ---
 
@@ -19,7 +21,7 @@ x18（Arch Linux + niri + fcitx5-rime，方案雾凇拼音）上，**Caps Lock �
    - editor 内建键位形如 `{XK_Delete, 0}` → DeleteChar（预编辑内前向删除）；
    - `KeyEvent::operator==` **含 modifier_ 逐位比较**；
    - 回退机制 `FallbackOptions::All` 只处理 **Shift**（ShiftAsControl / IgnoreShift），**没有 Lock 回退**。
-3. 于是 Caps Lock 开启时 Delete/BackSpace/Esc/Return/空格 全部失配 → editor 返回 kNoop → fcitx5 把按键**原样转发给应用** → 应用前向删除已上屏文本。
+3. 于是 Caps Lock 开启时 Delete/BackSpace/Esc/Return/空格 全部失配 → editor 返回 kNoop → fcitx5 把按键**原样转发给应用**：预编辑框因此完全不可编辑，应用则按自己的语义处理这次按键（删除、取消、移动光标）。
 4. 同理失效的还有：navigator 的方向键、key_binder 里修饰位为 0 的配置绑定（Tab、minus/equal 翻页、小键盘键）。
 5. 2026-10 查证 librime master 的 `key_binding_processor.*` 与 1.17.0 完全一致，**上游未修复**。
 
@@ -76,7 +78,7 @@ static Bool press(RimeSessionId id, int keycode, Bool caps_on) {
 
 | 按键（Caps Lock 开，带 Lock 位） | 修复前 | 修复后 |
 |---|---|---|
-| Delete | handled=0（转发给应用 → 误删） | **handled=1** |
+| Delete | handled=0（透传给应用，预编辑不可编辑） | **handled=1** |
 | BackSpace | handled=0 | **handled=1** |
 | Escape | handled=0 | **handled=1**（且正确清空预编辑） |
 | 主回车 Return | handled=0 | **handled=1**（提交原文 "nihao"） |
@@ -95,7 +97,7 @@ static Bool press(RimeSessionId id, int keycode, Bool caps_on) {
 
 ## 六、方法论沉淀
 
-1. **"大写锁定 + 输入法行为异常"先想修饰位精确匹配**：librime 的键位绑定（内建和配置）都要求修饰位逐位相等，Lock/NumLock 位会让所有 mask-0 绑定集体失配，且失败是静默的（键被转发给应用）。
+1. **"大写锁定 + 输入法行为异常"先想修饰位精确匹配**：librime 的键位绑定（内建和配置）都要求修饰位逐位相等，Lock/NumLock 位会让所有 mask-0 绑定集体失配，且失败是静默的——表现不是输入法报错或死掉，而是按键被透传给应用（预编辑框无响应，正文却跟着变）。
 2. **IME 键行为可以用 librime C API 写无头 harness 断言**（`process_key` 返回值即"是否被输入法消费"），比 GUI 复现快、可批量、可对照；userdb 不能两进程同开，务必对**拷贝**测试。
 3. 判断"键被谁处理"的最短路径：读 IME 引擎源码里键位匹配的**比较函数**，确认修饰位是否参与相等判断、有哪些回退。
 4. 相关：[[Fcitx5-Rime-雾凇拼音默认英文标点配置]]（同库的 rime 方案层配置笔记）。
