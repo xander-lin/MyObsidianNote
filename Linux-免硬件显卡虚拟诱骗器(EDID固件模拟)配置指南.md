@@ -105,3 +105,7 @@ cat /sys/class/drm/card0-DP-1/status
 # 3. 查看当前识别出的显示器模式/分辨率
 cat /sys/class/drm/card0-DP-1/modes
 ```
+
+---
+
+相关笔记：[[Linux-Moonlight串流选路配置]]（客户端侧强制走有线链路，避免多网卡主机串流走到 WiFi）
